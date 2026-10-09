@@ -574,33 +574,106 @@ export function countPureHanzi(text: string): number {
 }
 
 /**
- * Regex patterns identifying existing chapter headers in raw Chinese text
+ * Regex patterns identifying existing chapter headers in raw Chinese text.
+ * Covers 100% of standard, numbered, bracketed, volume-prefixed, English/Vietnamese,
+ * Jinjiang star markers (☆、), and glued formats (e.g. 第一章, 第一章惊变, 1 惊变, 【第1章】惊变, （1）, 正文卷 第一章, etc.).
  */
-const CHAPTER_HEADER_PATTERNS: RegExp[] = [
-  // Standalone: 第1章, 第一千二百章 逆天改命, 第 001 章：天道崩塌, 1 第1章 和平友爱族谱村, 2 第2章 和平友爱族谱村2
-  /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*-]{2,}\s*)?(?:【|\[|\()?\s*(?:正文\s*|VIP\s*|VIP章节\s*)?第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]\s*(?:】|\]|\))?(?:\s*[:：\-\—\s].*|\s+.*)?(?:\s*[=*-]{2,})?\s*$/i,
+export const CHAPTER_HEADER_PATTERNS: RegExp[] = [
+  // 1. Standalone: 第1章, 第一千二百章 逆天改命, 第一章惊变, 第 001 章：天道崩塌, 1 第1章 和平友爱族谱村, 正文卷 第一章 惊变, ☆、第一章
+  /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*\-~#☆★◆◇■●`]{2,}\s*|☆、\s*)?(?:[【\[\(（])?\s*(?:正文卷?|VIP卷?|VIP章节|作品相关|分卷(?:阅读)?|外传)?\s*第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]\s*(?:[】\]\)）])?(?:[:：\-\—·.\s]*[^\n]{0,60})?(?:\s*[=*\-~#]{2,})?\s*$/i,
 
-  // Standalone: Chapter 1, Chương 1: Bí Mật, Section 1
-  /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*-]{2,}\s*)?(?:Chapter|CHAPTER|Chương|CHƯƠNG|Section|SECTION)\s*[0-9]+(?:\s*[:：\-\—\s].*|\s+.*)?(?:\s*[=*-]{2,})?\s*$/i,
+  // 2. Standalone: Chapter 1, Chương 1: Bí Mật, Section 1, Chapter1, ☆、Chapter 1
+  /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*\-~#☆★◆◇■●`]{2,}\s*|☆、\s*)?(?:[【\[\(（])?\s*(?:Chapter|CHAPTER|Chương|CHƯƠNG|Section|SECTION)\s*[0-9]+(?:\s*[】\]\)）])?(?:[:：\-\—·.\s]*[^\n]{0,60})?(?:\s*[=*\-~#]{2,})?\s*$/i,
 
-  // Standalone: 1、林轩觉醒, 001. 重生都市, 1. 逃出生天, 1: 诡异降临
-  /^\s*[0-9]{1,5}\s*[、.：:\-\—]\s*[\u4e00-\u9fa5a-zA-Z0-9\s（）()【】\-—]{1,45}\s*$/,
+  // 3. Standalone: 1、林轩觉醒, 001. 重生都市, 1. 逃出生天, 1: 诡异降临, 1 惊变, 01 惊变, 001 惊变, 1-1 惊变, 1.1 惊变, 1. Đột phá, ☆、1 惊变
+  /^\s*(?:☆、\s*)?[0-9]{1,5}(?:[-.][0-9]{1,4})?\s*(?:[、.：:\-\—\s]|\s+)\s*[^\n]{1,50}\s*$/,
 
-  // Standalone: 001, 1, 12, 123 (chỉ có số độc lập trên 1 dòng ngắn)
-  /^\s*[0-9]{1,5}\s*$/,
+  // 4. Standalone pure number/index on a line: 1, 01, 001, 123, 1., 1、, 01., ☆、1
+  /^\s*(?:☆、\s*)?[0-9]{1,5}\s*[、.：:\-\—]?\s*$/,
 
-  // Standalone: 【第1章 惊变】, [第01回], (第1章), 【1】
-  /^\s*[【\[\(][^】\]\)]*(?:第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]|Chapter|Chương|[0-9]{1,4})[^】\]\)]*[】\]\)]\s*$/i,
+  // 5. Standalone: 【第1章 惊变】, [第01回], (第1章), 【1】, 【1】惊变, （1）, （1）惊变, （第1章）
+  /^\s*[【\[\(（]\s*(?:第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]|Chapter|Chương|[0-9]{1,4})\s*[】\]\)）](?:[:：\-\—\s]*[^\n]{0,50})?\s*$/i,
 
-  // Standalone: 一、 序曲, 二、 降临
-  /^\s*[一二三四五六七八九十百千万]+\s*[、.：:\-\—]\s*[\u4e00-\u9fa5a-zA-Z0-9\s]{1,40}\s*$/,
+  // 6. Standalone: 一、 序曲, 二、 降临, 一 序曲, 一. 序曲
+  /^\s*[一二三四五六七八九十百千万]+\s*(?:[、.：:\-\—\s]|\s+)\s*[^\n]{1,40}\s*$/,
 
-  // Standalone: === 第1章 ===, *** Chapter 1 ***
-  /^\s*[=*-]{2,}\s*.*?(?:第.+?[章回节]|Chapter|Chương|[0-9]{1,4}).*?\s*[=*-]{2,}\s*$/i,
+  // 7. Standalone: === 第1章 ===, *** Chapter 1 ***, === 第一章 惊变 ===
+  /^\s*[=*\-~#]{2,}\s*.*?(?:第.+?[章回节]|Chapter|Chương|[0-9]{1,4}).*?\s*[=*\-~#]{2,}\s*$/i,
 
-  // Standalone short section markers: 卷一、分卷阅读, 第一卷: 和平友爱族谱村
-  /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:卷[0-9一二三四五六七八九十百千万零两]+|第\s*[0-9一二三四五六七八九十百千万零两]+\s*卷|分卷阅读[0-9一二三四五六七八九十百千万零两]*|作品相关|序章|楔子|引子|尾声|番外[0-9一二三四五六七八九十百千万零两]*)\s*(?:[:：\-\—\s].*)?\s*$/,
+  // 8. Standalone short section markers: 卷一、分卷阅读, 第一卷: 和平友爱族谱村, 番外: 婚后日常, 序章, 楔子, 尾声
+  /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:卷[0-9一二三四五六七八九十百千万零两]+|第\s*[0-9一二三四五六七八九十百千万零两]+\s*卷|分卷阅读[0-9一二三四五六七八九十百千万零两]*|作品相关|序章|楔子|引子|尾声|后记|番外\s*[0-9一二三四五六七八九十百千万零两]*)\s*(?:[:：\-\—\s].*)?\s*$/,
 ];
+
+/**
+ * Checks if a standalone line is an existing chapter header in any common web novel format
+ */
+export function isExistingChapterHeaderLine(line: string): boolean {
+  if (!line || !line.trim()) return false;
+  const trimmed = line.trim();
+
+  // If line is too long, it's definitely story body, not a chapter header
+  if (trimmed.length > 80) return false;
+
+  // If line ends with a dialogue colon or quote, it's story text
+  if (/[:：]\s*$/.test(trimmed) || /[“"「『]$/.test(trimmed)) return false;
+
+  // Sentences ending in Chinese full stop / semicolon are narrative sentences, not headers!
+  if (/[。；，]$/.test(trimmed)) return false;
+
+  return CHAPTER_HEADER_PATTERNS.some((pattern) => pattern.test(trimmed));
+}
+
+/**
+ * Regex patterns identifying inline chapter headers prefixing a story paragraph
+ * e.g. "第1章 惊变 林轩缓缓睁开双眼..." -> strips "第1章 惊变"
+ */
+export function stripInlineChapterPrefix(line: string): { prefix: string; remaining: string } | null {
+  if (!line || !line.trim()) return null;
+  const trimmed = line.trim();
+
+  // If line is already a standalone chapter header line, handled separately
+  if (isExistingChapterHeaderLine(trimmed)) {
+    return null;
+  }
+
+  // 1. 第...章/回/节/篇/集/卷/部/话/折 followed by optional title and story text
+  const match1 = trimmed.match(
+    /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*-]{2,}\s*)?(?:[【\[\(（])?\s*(?:正文卷?|VIP卷?|VIP章节|作品相关|分卷(?:阅读)?|外传)?\s*第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]\s*(?:[】\]\)）])?(?:\s*[:：\-\—·.\s]\s*[^\s“"「『\n\u3000]{1,25}|\s+[^\s“"「『\n\u3000]{1,25})?\s+(?=\S)/i
+  );
+  if (match1) {
+    const rem = trimmed.slice(match1[0].length).trim();
+    if (rem.length >= 2) return { prefix: match1[0].trim(), remaining: rem };
+  }
+
+  // 2. Chapter / Chương / Section inline
+  const match2 = trimmed.match(
+    /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*-]{2,}\s*)?(?:[【\[\(（])?\s*(?:Chapter|CHAPTER|Chương|CHƯƠNG|Section|SECTION)\s*[0-9]+(?:\s*[】\]\)）])?(?:\s*[:：\-\—·.\s]\s*[^\s“"「『\n\u3000]{1,25}|\s+[^\s“"「『\n\u3000]{1,25})?\s+(?=\S)/i
+  );
+  if (match2) {
+    const rem = trimmed.slice(match2[0].length).trim();
+    if (rem.length >= 2) return { prefix: match2[0].trim(), remaining: rem };
+  }
+
+  // 3. Numbered inline: "1. 惊变 林轩..." or "1 惊变 林轩..." or "01. 惊变 林轩..." or "3. Đột phá Hắn..."
+  const match3 = trimmed.match(
+    /^\s*[0-9]{1,5}(?:[-.][0-9]{1,4})?\s*(?:[、.：:\-\—\s]|\s+)\s*[^\s“"「『\n\u3000]{1,25}\s+(?=\S)/
+  );
+  if (match3) {
+    const rem = trimmed.slice(match3[0].length).trim();
+    if (rem.length >= 2) return { prefix: match3[0].trim(), remaining: rem };
+  }
+
+  // 4. Bracketed inline: "【第1章 惊变】 林轩..." or "【1】 林轩..."
+  const match4 = trimmed.match(
+    /^\s*[【\[\(（]\s*(?:第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]|Chapter|Chương|[0-9]{1,4})\s*[】\]\)）](?:\s*[:：\-\—\s]*[^\s“"「『\n\u3000]{1,25})?\s+(?=\S)/i
+  );
+  if (match4) {
+    const rem = trimmed.slice(match4[0].length).trim();
+    if (rem.length >= 2) return { prefix: match4[0].trim(), remaining: rem };
+  }
+
+  return null;
+}
 
 /**
  * Strips author notes (lời tác giả / 作话 / 作者有话说 / 题外话 / PS) safely and precisely from raw Chinese text.
@@ -612,18 +685,18 @@ export function stripAuthorNotes(rawText: string): string {
 
   let text = rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
 
-  // 1. Remove bracketed author note blocks self-contained inside brackets with colon / content
-  // e.g. 【作者有话说：...】, 【作话：...】, 【作者题外话：...】, 【作家想说的话：...】
+  // 1. Remove bracketed author note blocks self-contained inside brackets
+  // e.g. 【作者有话要说：...】, 【作者有话说：...】, 【作话：...】, 【小剧场：...】, 【题外话：...】
   text = text.replace(
-    /【\s*(?:作者\s*(?:有话说|题外话|留言|唠叨|碎碎念|碎念|想说的话|唠嗑|的话)|作话|题外话|作家想说的话|作家的话|彩蛋章|本章说|感谢名单|加更说明)\s*[:：][^】]{0,800}】/g,
+    /【\s*(?:作者\s*(?:有话要?说|有话要?讲|有话|想说(?:的话)?|的话|说|留言|唠叨|叨叨|碎碎念|碎念|废话|吐槽|菌说|君说|君有话要?说|菌有话要?说|君|菌|bb|BB)|作话|题外话|作家\s*(?:想说(?:的话)?|的话|说|留言)|彩蛋章|小剧场|番外小剧场|加更说明|请假条|请假说明|入[vV]公告|入[vV]通知|感谢名单|PS|ps)\s*[:：]?[^】]{0,1000}】/gi,
     ''
   );
   text = text.replace(
-    /\[\s*(?:作者\s*(?:有话说|题外话|留言|唠叨|碎碎念|碎念|想说的话|的话)|作话|题外话)\s*[:：][^\]\n]{0,300}\]/g,
+    /\[\s*(?:作者\s*(?:有话要?说|有话要?讲|有话|想说(?:的话)?|的话|说|留言|唠叨|叨叨|碎碎念|碎念|废话|吐槽|菌说|君说|君有话要?说|菌有话要?说|君|菌|bb|BB)|作话|题外话|作家\s*(?:想说(?:的话)?|的话|说|留言)|小剧场|PS|ps)\s*[:：]?[^\]\n]{0,500}\]/gi,
     ''
   );
   text = text.replace(
-    /[（\(]\s*(?:作者\s*(?:有话说|题外话|留言|唠叨|碎碎念|碎念|想说的话|菌|君|注|的话)|作话|题外话|PS|ps)\s*[:：]?[^）\)\n]{0,300}[）\)]/g,
+    /[（\(]\s*(?:作者\s*(?:有话要?说|有话要?讲|有话|想说(?:的话)?|的话|说|留言|唠叨|叨叨|碎碎念|碎念|废话|吐槽|菌说|君说|君有话要?说|菌有话要?说|君|菌|bb|BB)|作话|题外话|作家\s*(?:想说(?:的话)?|的话|说|留言)|小剧场|PS|ps)\s*[:：]?[^）\)\n]{0,500}[）\)]/gi,
     ''
   );
 
@@ -632,18 +705,28 @@ export function stripAuthorNotes(rawText: string): string {
   let inAuthorNoteBlock = false;
 
   // Chapter header patterns to safely exit author note block and preserve the new chapter
-  // Covers: 第一章, 第1章, 1., 01, Chapter 1, Chương 1, 【第1章】, 一、, etc.
+  // Must distinguish between actual chapter titles and bullet points / lists inside author notes
   const isChapterHeader = (trimmedLine: string): boolean => {
     if (!trimmedLine || trimmedLine.length > 80) return false;
-    // Lines ending with dialogue colons or opening quotes are dialogue/story narrative
+    // Lines ending with dialogue colons, opening quotes, or sentence terminators (period/semicolon/comma) are NOT chapter headers
     if (/[:：]\s*$/.test(trimmedLine) || /[“"「『]$/.test(trimmedLine)) return false;
+    if (/[。；，]$/.test(trimmedLine)) return false;
+
+    // Reject bullet points, thank-you donor lines, and comments inside author's note
+    if (
+      /(?:小天使|地雷|营养液|霸王票|火箭炮|鱼雷|小剧场|更新|请假|双更|加更|专栏|晋江|作者|么么哒|比心|评论|收藏|打赏|投喂|本文|考据|身心|双洁|排雷|剧透|作话|文案|微博|催更|投出|灌溉|[0-9]+[个瓶])/i.test(
+        trimmedLine
+      )
+    ) {
+      return false;
+    }
 
     // Fast check against existing chapter header detector
     if (isExistingChapterHeaderLine(trimmedLine)) return true;
 
-    // 1. 第...章/回/节/篇/集/卷/部/话/折 (e.g. 第一章, 第1章, 1 第1章, 正文 第一章, 【第1章】)
+    // 1. 第...章/回/节/篇/集/卷/部/话/折
     if (
-      /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*-]{2,}\s*)?(?:【|\[|\()?\s*(?:正文\s*|VIP\s*|VIP章节\s*)?第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]/i.test(
+      /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*\-~#☆★◆◇■●`]{2,}\s*|☆、\s*)?(?:[【\[\(（])?\s*(?:正文卷?|VIP卷?|VIP章节|作品相关|分卷(?:阅读)?|外传)?\s*第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]/i.test(
         trimmedLine
       )
     ) {
@@ -652,57 +735,57 @@ export function stripAuthorNotes(rawText: string): string {
 
     // 2. Chapter / Chương / Section
     if (
-      /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*-]{2,}\s*)?(?:Chapter|CHAPTER|Chương|CHƯƠNG|Section|SECTION)\s*[0-9]+/i.test(
+      /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*\-~#☆★◆◇■●`]{2,}\s*|☆、\s*)?(?:[【\[\(（])?\s*(?:Chapter|CHAPTER|Chương|CHƯƠNG|Section|SECTION)\s*[0-9]+/i.test(
         trimmedLine
       )
     ) {
       return true;
     }
 
-    // 3. Numbered: 1. , 1、, 01. , 1: , 1 - 
+    // 3. Numbered: 1. 惊变, 1、惊变, 01. 惊变, 1 惊变, 01 惊变, ☆、1 惊变
     if (
-      /^\s*[0-9]{1,5}\s*[、.：:\-\—\s]\s*[\u4e00-\u9fa5a-zA-Z0-9\s（）()【】\-—]{1,45}\s*$/.test(
+      /^\s*(?:☆、\s*)?[0-9]{1,5}(?:[-.][0-9]{1,4})?\s*(?:[、.：:\-\—\s]|\s+)\s*[\u4e00-\u9fa5a-zA-Z0-9\s（）()【】\-—]{1,40}\s*$/.test(
         trimmedLine
       )
     ) {
       return true;
     }
 
-    // 4. Standalone pure number: 1, 2, 01, 001
+    // 4. Standalone pure number/index on a line: 1, 01, 001, 123
     if (/^\s*[0-9]{1,5}\s*$/.test(trimmedLine)) {
       return true;
     }
 
-    // 5. Chinese numeral header: 一、, 二、, 一. 
+    // 5. Standalone bracketed: 【第1章 惊变】, [第01回], (第1章), 【1】, 【1】惊变, （1）, （1）惊变
     if (
-      /^\s*[一二三四五六七八九十百千万]+\s*[、.：:\-\—\s]\s*[\u4e00-\u9fa5a-zA-Z0-9\s]{1,40}\s*$/.test(
+      /^\s*[【\[\(（]\s*(?:第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]|Chapter|Chương|[0-9]{1,4})\s*[】\]\)）](?:[:：\-\—\s]*[^\n]{0,40})?\s*$/i.test(
         trimmedLine
       )
     ) {
       return true;
     }
 
-    // 6. Bracketed chapter/index: 【第1章】, 【1】, [1], （1）
+    // 6. Chinese numeral header: 一、 序曲, 二、 降临, 一 序曲
     if (
-      /^\s*[【\[\(][^】\]\)]*(?:第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]|Chapter|Chương|[0-9]{1,4})[^】\]\)]*[】\]\)]\s*$/i.test(
+      /^\s*[一二三四五六七八九十百千万]+\s*(?:[、.：:\-\—\s]|\s+)\s*[\u4e00-\u9fa5a-zA-Z0-9\s]{1,40}\s*$/.test(
         trimmedLine
       )
     ) {
       return true;
     }
 
-    // 7. Divider chapter header: === 第1章 ===, *** 第一章 ***
+    // 7. Divider chapter header: === 第1章 ===, *** Chapter 1 ***, === 第一章 惊变 ===
     if (
-      /^\s*[=*-]{2,}\s*.*?(?:第.+?[章回节]|Chapter|Chương|[0-9]{1,4}).*?\s*[=*-]{2,}\s*$/i.test(
+      /^\s*[=*\-~#]{2,}\s*.*?(?:第.+?[章回节]|Chapter|Chương|[0-9]{1,4}).*?\s*[=*\-~#]{2,}\s*$/i.test(
         trimmedLine
       )
     ) {
       return true;
     }
 
-    // 8. Special section markers: 序章, 楔子, 引子, 尾声, 番外, 后记, 作品相关
+    // 8. Special section markers: 序章, 楔子, 引子, 尾声, 后记, 番外 1
     if (
-      /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:卷[0-9一二三四五六七八九十百千万零两]+|第\s*[0-9一二三四五六七八九十百千万零两]+\s*卷|分卷阅读[0-9一二三四五六七八九十百千万零两]*|作品相关|序章|楔子|引子|尾声|番外[0-9一二三四五六七八九十百千万零两]*|后记)\s*(?:[:：\-\—\s].*)?\s*$/.test(
+      /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:序章|楔子|引子|尾声|后记|番外\s*[0-9一二三四五六七八九十百千万零两]*)\s*(?:[:：\-\—\s].*)?\s*$/.test(
         trimmedLine
       )
     ) {
@@ -712,36 +795,31 @@ export function stripAuthorNotes(rawText: string): string {
     return false;
   };
 
+  const authorStartRegexes: RegExp[] = [
+    // 1. Standalone author with colon or in brackets: "作者：", "作者:", "【作者】"
+    /^\s*(?:[=*\-~#☆★◆◇■●`]{2,}\s*|☆、\s*)?(?:[【\[\(（]\s*作者\s*[】\]\)）]|作者\s*[:：])/i,
+
+    // 2. Author keywords (有话要说, 有话说, 留言, 唠叨, 碎碎念, etc.):
+    /^\s*(?:[=*\-~#☆★◆◇■●`]{2,}\s*|☆、\s*)?(?:[【\[\(（])?\s*(?:作者\s*(?:有话要?说|有话要?讲|有话|想说(?:的话)?|的话|说|留言|唠叨|叨叨|碎碎念|碎念|废话|吐槽|菌说|君说|君有话要?说|菌有话要?说|君|菌|bb|BB)|作话|题外话|作家\s*(?:想说(?:的话)?|的话|说|留言)|彩蛋章|小剧场|番外小剧场|加更说明|请假条|请假说明|入[vV]公告|入[vV]通知|感谢名单)\s*(?:[】\]\)）])?\s*[:：\-\—]?(?:.*|$)/i,
+
+    // 3. PS / P.S / 附言 / 另 / 插播: must have colon or brackets e.g. "PS：", "【PS】", "ps:"
+    /^\s*(?:[=*\-~#☆★◆◇■●`]{2,}\s*)?(?:[【\[\(（]\s*(?:PS|ps|P\.S|p\.s|附言|另|插播)\s*[】\]\)）]|(?:PS|ps|P\.S|p\.s|附言|另|插播)\s*[:：])/i,
+
+    // 4. Thank-you banners / system donation notes (Jinjiang/Qidian)
+    /^\s*(?:感谢在.*?期间为我投出霸王票|感谢投出.*?小天使|感谢灌溉.*?小天使|非常感谢大家对我的支持|感谢大家投喂|感谢各位小天使)/i,
+  ];
+
   // Author note start marker:
-  // e.g. 作者有话说：, 作者有话说:, 作者有话说, 【作者有话说】, 作话：, 题外话：, PS：, etc.
   const isAuthorNoteStart = (trimmedLine: string): boolean => {
     if (!trimmedLine) return false;
     // Dialogue quotes do not start author notes
     if (/^[“"「『]/.test(trimmedLine)) return false;
-
-    // Pattern A: Standalone or with colon: "作者有话说：...", "【作者有话说】", "作话：...", "题外话：..."
-    const keywordPattern =
-      /^(?:[=*-~#]{2,}\s*)?(?:【|\[|\(|（)?\s*(?:作者\s*(?:有话说|题外话|留言|唠叨|碎碎念|碎念|想说的话|唠嗑|菌说|君说|的话)|作话|题外话|作家想说的话|作家的话|彩蛋章|感谢名单|加更说明)\s*(?:】|\]|\)|）)?\s*[:：]?/i;
-    if (keywordPattern.test(trimmedLine)) {
-      return true;
-    }
-
-    // Pattern B: Standalone author line: "作者：" / "作者:"
-    if (/^(?:[=*-~#]{2,}\s*)?(?:【|\[|\(|（)?\s*作者\s*(?:】|\]|\)|）)?\s*[:：]/i.test(trimmedLine)) {
-      return true;
-    }
-
-    // Pattern C: PS lines: "PS：", "ps:", "P.S:"
-    if (/^(?:[=*-~#]{2,}\s*)?(?:[（\(【\[])?\s*(?:PS|ps|P\.S|p\.s)\s*[:：]/i.test(trimmedLine)) {
-      return true;
-    }
-
-    return false;
+    return authorStartRegexes.some((r) => r.test(trimmedLine));
   };
 
   // Chapter end markers: (本章完), 【本章完】, ===本章完===
   const chapterEndMarkerRegex =
-    /^\s*(?:[=*-~#]{2,}\s*)?(?:【|\[|\(|（)?\s*(?:本章完|全书完|完结|正文完)\s*(?:】|\]|\)|）)?(?:\s*[=*-~#]{2,})?\s*$/;
+    /^\s*(?:[=*\-~#]{2,}\s*)?(?:【|\[|\(|（)?\s*(?:本章完|全书完|完结|正文完)\s*(?:】|\]|\)|）)?(?:\s*[=*\-~#]{2,})?\s*$/;
 
   // Pure vote / recommendation begs
   const voteBegRegex =
@@ -804,22 +882,6 @@ export function stripAuthorNotes(rawText: string): string {
   }
 
   return resultLines.join('\n');
-}
-
-/**
- * Checks if a standalone line is an existing chapter header
- */
-export function isExistingChapterHeaderLine(line: string): boolean {
-  if (!line || !line.trim()) return false;
-  const trimmed = line.trim();
-
-  // If line is too long, it's definitely story body, not a chapter header
-  if (trimmed.length > 80) return false;
-
-  // If line ends with a dialogue colon or quote, it's story text
-  if (/[:：]\s*$/.test(trimmed) || /[“「『]$/.test(trimmed)) return false;
-
-  return CHAPTER_HEADER_PATTERNS.some((pattern) => pattern.test(trimmed));
 }
 
 /**
@@ -1155,7 +1217,8 @@ export function parseRawIntoBlocksWithDungeon(
   autoDetectDungeon = false,
   customTitlesToStrip = '',
   stripWebMetadata = true,
-  stripAuthorNotesEnabled = true
+  stripAuthorNotesEnabled = true,
+  autoStripExistingHeaders = true
 ): {
   blocks: BlockWithMetadata[];
   detectedDungeons: DetectedDungeon[];
@@ -1180,10 +1243,6 @@ export function parseRawIntoBlocksWithDungeon(
   const detectedDungeons: DetectedDungeon[] = [];
   let currentActiveDungeon: string | undefined = undefined;
   let strippedCount = 0;
-
-  // Regex to strip inline chapter prefixes if a line starts with "第1章 惊变 ... "
-  const inlineHeaderRegex =
-    /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*-]{2,}\s*)?(?:【|\[|\()?\s*(?:正文\s*|VIP\s*|VIP章节\s*)?第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]\s*(?:】|\]|\))?(?:\s*[:：\-\—\s][^\n\u3000]{1,35})?\s+(?=[“「『\u4e00-\u9fa5a-zA-Z0-9])/;
 
   const transitionRegex =
     /(?:现实|日常|过度|过渡|休憩|休息|结算|抽奖|回归|准备|整顿|番外|总结|Interlude|Real\s*World|Hiện\s*thực|Kết\s*toán|Nghỉ\s*ngơi)/i;
@@ -1229,36 +1288,35 @@ export function parseRawIntoBlocksWithDungeon(
     }
 
     // 3. Check if line is an isolated standard chapter header
-    if (isExistingChapterHeaderLine(trimmed)) {
+    if (autoStripExistingHeaders && isExistingChapterHeaderLine(trimmed)) {
       strippedCount++;
       continue; // Skip the header itself
     }
 
     // 4. Check if line starts with an inline chapter header (strip it)
-    if (inlineHeaderRegex.test(trimmed)) {
-      const match = trimmed.match(inlineHeaderRegex);
-      if (match) {
-        const headerPart = match[0].trim();
+    if (autoStripExistingHeaders) {
+      const inlineMatch = stripInlineChapterPrefix(trimmed);
+      if (inlineMatch) {
         strippedCount++;
         if (autoDetectDungeon) {
-          if (transitionRegex.test(headerPart)) {
+          if (transitionRegex.test(inlineMatch.prefix)) {
             currentActiveDungeon = undefined;
           } else {
-            const dInfo = extractDungeonFromHeader(headerPart);
+            const dInfo = extractDungeonFromHeader(inlineMatch.prefix);
             if (dInfo && dInfo.name) {
               currentActiveDungeon = dInfo.name;
               if (!detectedDungeons.some((d) => d.name === dInfo.name)) {
                 detectedDungeons.push({
                   name: dInfo.name,
                   suggestedStartIndex: dInfo.index || 1,
-                  rawSample: headerPart,
+                  rawSample: inlineMatch.prefix,
                   formatHint: dInfo.formatHint,
                 });
               }
             }
           }
         }
-        trimmed = trimmed.slice(match[0].length).trim();
+        trimmed = inlineMatch.remaining;
         if (!trimmed) continue;
       }
     }
@@ -1307,7 +1365,8 @@ export function splitRawIntoChineseChapters(
     config.enableInfiniteFlow && config.dungeonAutoDetect,
     config.customTitlesToStrip,
     config.stripWebMetadata,
-    config.stripAuthorNotes !== false
+    config.stripAuthorNotes !== false,
+    config.autoStripExistingHeaders !== false
   );
 
   if (blocks.length === 0) {
