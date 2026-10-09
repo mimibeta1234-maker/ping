@@ -4,7 +4,7 @@ import {
   Trash2,
   ClipboardPaste,
   Scissors,
-  Sparkles,
+  Layers,
   Compass,
   Search,
   Check,
@@ -12,14 +12,17 @@ import {
   ChevronDown,
   ChevronUp,
   FileText,
+  Bookmark,
 } from 'lucide-react';
 import {
   countChineseChars,
   scanDungeonsFromRaw,
   formatDungeonBracket,
+  formatChapterHeader,
   extractCustomTitlesSet,
 } from '../utils/chineseSplitter';
 import { SplitChineseConfig, ChapterPrefixType, DungeonBracketStyle } from '../types';
+import { VHLTOCAnalyzerModal } from './VHLTOCAnalyzerModal';
 
 interface ChineseInputPanelProps {
   rawText: string;
@@ -28,6 +31,8 @@ interface ChineseInputPanelProps {
   onChangeConfig: (newConfig: SplitChineseConfig) => void;
   onProcessSplit: () => void;
   onClear: () => void;
+  onOpenFanqieDownloader?: () => void;
+  onOpenDanmeiLeaderboard?: () => void;
 }
 
 export const ChineseInputPanel: React.FC<ChineseInputPanelProps> = ({
@@ -40,6 +45,7 @@ export const ChineseInputPanel: React.FC<ChineseInputPanelProps> = ({
 }) => {
   const [dragActive, setDragActive] = useState(false);
   const [showTitleFilter, setShowTitleFilter] = useState(Boolean(config.customTitlesToStrip));
+  const [isTOCModalOpen, setIsTOCModalOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const totalChars = countChineseChars(rawText);
@@ -121,14 +127,12 @@ export const ChineseInputPanel: React.FC<ChineseInputPanelProps> = ({
 
     if (!config.enableInfiniteFlow) return `${p} ...`;
 
-    const dName = config.dungeonName.trim() || (detectedDungeons[0]?.name || 'Tên phó bản');
-    const b1 = formatDungeonBracket(config.dungeonStartIndex || 1, config.dungeonBracketStyle);
-    const b2 = formatDungeonBracket((config.dungeonStartIndex || 1) + 1, config.dungeonBracketStyle);
+    const dName = config.dungeonName.trim() || (detectedDungeons[0]?.name || '和平友爱族谱村');
+    const startIdx = config.dungeonStartIndex || 1;
+    const h1 = formatChapterHeader(1, config, 1500, dName, startIdx);
+    const h2 = formatChapterHeader(2, config, 1500, dName, startIdx + 1);
 
-    if (config.prefixFormat === 'chuong') {
-      return `${p} ${dName} ${b1}  ➔  Chương 2: ${dName} ${b2}`;
-    }
-    return `${p} ${dName} ${b1}  ➔  第 2 章 ${dName} ${b2}`;
+    return `${h1.header}  ➔  ${h2.header}`;
   }, [config, detectedDungeons]);
 
   return (
@@ -203,8 +207,8 @@ export const ChineseInputPanel: React.FC<ChineseInputPanelProps> = ({
       </div>
 
       {/* Settings Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 pt-0.5 text-xs">
-        <div className="col-span-2 sm:col-span-1">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-0.5 text-xs">
+        <div>
           <label className="block text-[11px] text-pink-700 font-medium mb-1">Tên truyện / Folder:</label>
           <input
             type="text"
@@ -258,40 +262,54 @@ export const ChineseInputPanel: React.FC<ChineseInputPanelProps> = ({
             <option value="di-hui">第 1 回</option>
           </select>
         </div>
+      </div>
 
-        <div className="flex items-center">
-          <label className="flex items-center space-x-2 cursor-pointer pt-3 sm:pt-0">
-            <input
-              type="checkbox"
-              checked={config.autoStripExistingHeaders}
-              onChange={(e) =>
-                onChangeConfig({
-                  ...config,
-                  autoStripExistingHeaders: e.target.checked,
-                })
-              }
-              className="w-4 h-4 rounded text-pink-500 focus:ring-pink-300 border-pink-300 accent-pink-400 cursor-pointer"
-            />
-            <span className="text-pink-900 text-xs font-medium">Xóa số chương cũ</span>
-          </label>
-        </div>
+      {/* Quick Cleaning Options Row */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 pt-1 text-xs">
+        <label className="flex items-center space-x-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={config.autoStripExistingHeaders}
+            onChange={(e) =>
+              onChangeConfig({
+                ...config,
+                autoStripExistingHeaders: e.target.checked,
+              })
+            }
+            className="w-4 h-4 rounded text-pink-500 focus:ring-pink-300 border-pink-300 accent-pink-400 cursor-pointer"
+          />
+          <span className="text-pink-900 font-medium">Xóa số chương cũ</span>
+        </label>
 
-        <div className="flex items-center">
-          <label className="flex items-center space-x-2 cursor-pointer pt-3 sm:pt-0">
-            <input
-              type="checkbox"
-              checked={config.dialogueSafe}
-              onChange={(e) =>
-                onChangeConfig({
-                  ...config,
-                  dialogueSafe: e.target.checked,
-                })
-              }
-              className="w-4 h-4 rounded text-pink-500 focus:ring-pink-300 border-pink-300 accent-pink-400 cursor-pointer"
-            />
-            <span className="text-pink-900 text-xs font-medium">Bảo vệ câu thoại</span>
-          </label>
-        </div>
+        <label className="flex items-center space-x-2 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={config.dialogueSafe}
+            onChange={(e) =>
+              onChangeConfig({
+                ...config,
+                dialogueSafe: e.target.checked,
+              })
+            }
+            className="w-4 h-4 rounded text-pink-500 focus:ring-pink-300 border-pink-300 accent-pink-400 cursor-pointer"
+          />
+          <span className="text-pink-900 font-medium">Bảo vệ câu thoại</span>
+        </label>
+
+        <label className="flex items-center space-x-2 cursor-pointer select-none bg-pink-100/60 hover:bg-pink-100 px-2.5 py-1 rounded-xl border border-pink-200/80 transition-colors">
+          <input
+            type="checkbox"
+            checked={config.stripAuthorNotes ?? true}
+            onChange={(e) =>
+              onChangeConfig({
+                ...config,
+                stripAuthorNotes: e.target.checked,
+              })
+            }
+            className="w-4 h-4 rounded text-pink-500 focus:ring-pink-300 border-pink-300 accent-pink-400 cursor-pointer"
+          />
+          <span className="text-pink-950 font-bold">Bỏ lời tác giả (作话 / 题外话)</span>
+        </label>
       </div>
 
       {/* FILTER UNNUMBERED TITLES & WEB METADATA SECTION */}
@@ -376,7 +394,7 @@ export const ChineseInputPanel: React.FC<ChineseInputPanelProps> = ({
 
       {/* INFINITE FLOW (VÔ HẠN LƯU) SPECIAL SECTION */}
       <div className="bg-pink-50/50 border border-pink-200/70 rounded-2xl p-3 sm:p-4 space-y-2.5">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <label className="flex items-center space-x-2 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -395,12 +413,63 @@ export const ChineseInputPanel: React.FC<ChineseInputPanelProps> = ({
             </span>
           </label>
 
-          {config.enableInfiniteFlow && (
-            <span className="text-[11px] font-medium text-pink-600 bg-pink-100/80 px-2 py-0.5 rounded-full border border-pink-200/60">
-              {previewSampleHeader}
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setIsTOCModalOpen(true)}
+              className="px-3 py-1.5 bg-pink-100 hover:bg-pink-200/80 text-pink-800 border border-pink-300/70 rounded-xl text-xs font-semibold shadow-2xs flex items-center gap-1.5 transition-all cursor-pointer transform active:scale-95"
+            >
+              <Bookmark className="w-3.5 h-3.5 text-pink-600" />
+              <span>Phân tích mục lục VHL</span>
+            </button>
+
+            {config.enableInfiniteFlow && (
+              <span className="text-[11px] font-medium text-pink-700 bg-pink-100/70 px-2.5 py-0.5 rounded-full border border-pink-200/80">
+                {previewSampleHeader}
+              </span>
+            )}
+          </div>
         </div>
+
+        {/* Status banner when TOC has been analyzed and applied */}
+        {config.enableInfiniteFlow && config.useAnalyzedTOC && (config.analyzedChapterHeaders?.length ?? 0) > 0 && (
+          <div className="bg-pink-100/50 border border-pink-200/80 rounded-xl p-2.5 flex items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2">
+              <Check className="w-4 h-4 text-emerald-600 font-bold shrink-0" />
+              <div>
+                <span className="font-bold text-pink-950">
+                  Đang kích hoạt danh sách tiêu đề mục lục ({config.analyzedChapterHeaders?.length} chương)
+                </span>
+                <span className="text-[11px] text-pink-700 ml-1.5 font-medium">
+                  • Chương quá độ: {config.vhlTransitionMode === 'empty-title' || config.vhlTransitionMode === 'pure-number' ? 'Để trống tên chương (chỉ số chương)' : config.vhlTransitionMode === 'custom-label' ? `Gán nhãn "${config.vhlTransitionCustomLabel}"` : 'Giữ tên gốc tác giả'}
+                </span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setIsTOCModalOpen(true)}
+                className="text-pink-600 hover:text-pink-800 font-bold underline text-xs cursor-pointer"
+              >
+                Chỉnh sửa
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  onChangeConfig({
+                    ...config,
+                    useAnalyzedTOC: false,
+                    analyzedChapterHeaders: [],
+                  })
+                }
+                className="text-gray-400 hover:text-red-500 text-xs cursor-pointer ml-1"
+                title="Hủy áp dụng mục lục"
+              >
+                Gỡ bỏ
+              </button>
+            </div>
+          </div>
+        )}
 
         {config.enableInfiniteFlow && (
           <div className="pt-2 border-t border-pink-200/50 space-y-3 animate-in fade-in duration-150">
@@ -450,7 +519,7 @@ export const ChineseInputPanel: React.FC<ChineseInputPanelProps> = ({
               {/* Bracket Style */}
               <div>
                 <label className="block text-[11px] text-pink-800 font-medium mb-1">
-                  Định dạng số phần:
+                  Định dạng tên / số phần phó bản:
                 </label>
                 <select
                   value={config.dungeonBracketStyle}
@@ -462,10 +531,33 @@ export const ChineseInputPanel: React.FC<ChineseInputPanelProps> = ({
                   }
                   className="w-full bg-white border border-pink-200 rounded-xl px-2.5 py-1.5 text-pink-900 text-xs focus:outline-none focus:border-pink-400 font-medium cursor-pointer"
                 >
-                  <option value="half">(1), (2), (3)</option>
-                  <option value="full">（1）, （2）, （3）</option>
-                  <option value="bracket">【1】, 【2】, 【3】</option>
-                  <option value="dash">- 1, - 2, - 3</option>
+                  <option value="suffix-omit-first">
+                    PhóBản, PhóBản2, PhóBản3... (C1 không số, từ C2 dính liền số - Như trong ảnh)
+                  </option>
+                  <option value="suffix">
+                    PhóBản1, PhóBản2, PhóBản3... (Dính liền số không ngoặc)
+                  </option>
+                  <option value="space">
+                    PhóBản 1, PhóBản 2, PhóBản 3... (Cách 1 khoảng trắng)
+                  </option>
+                  <option value="half">
+                    PhóBản (1), PhóBản (2)... (Ngoặc đơn nửa góc)
+                  </option>
+                  <option value="full">
+                    PhóBản（1）, PhóBản（2）... (Ngoặc đơn tiếng Trung)
+                  </option>
+                  <option value="bracket">
+                    PhóBản【1】, PhóBản【2】... (Ngoặc vuông đậm)
+                  </option>
+                  <option value="dash">
+                    PhóBản - 1, PhóBản - 2... (Dấu gạch nối)
+                  </option>
+                  <option value="chinese-bracket">
+                    PhóBản（一）, PhóBản（二）... (Ngoặc chữ Hán)
+                  </option>
+                  <option value="chinese-suffix">
+                    PhóBản一, PhóBản二... (Chữ Hán dính liền)
+                  </option>
                 </select>
               </div>
             </div>
@@ -486,6 +578,7 @@ export const ChineseInputPanel: React.FC<ChineseInputPanelProps> = ({
                         ...config,
                         dungeonName: d.name,
                         dungeonStartIndex: d.suggestedStartIndex || 1,
+                        dungeonBracketStyle: d.formatHint || config.dungeonBracketStyle,
                       })
                     }
                     title={`Chọn "${d.name}" (Bắt đầu từ ${d.suggestedStartIndex})`}
@@ -510,6 +603,14 @@ export const ChineseInputPanel: React.FC<ChineseInputPanelProps> = ({
         <Scissors className="w-4 h-4" />
         <span>Chia & Đánh số chương</span>
       </button>
+
+      {/* VHL TOC Analyzer Modal */}
+      <VHLTOCAnalyzerModal
+        isOpen={isTOCModalOpen}
+        onClose={() => setIsTOCModalOpen(false)}
+        config={config}
+        onApplyConfig={(updated) => onChangeConfig({ ...config, ...updated })}
+      />
     </div>
   );
 };

@@ -1,6 +1,6 @@
 {
   "name": "Ping",
-  "description": "Ứng dụng chia file raw tiểu thuyết tiếng Trung thành các chương ~1500 chữ theo đoạn văn tự nhiên, không ngắt dở câu thoại, tự động đánh số chương và xuất file.",
+  "description": "Ứng dụng chia file raw tiểu thuyết tiếng Trung thành các chương chuẩn và tích hợp công cụ tải raw Fanqie trực tiếp theo khoảng chương hoặc toàn bộ.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

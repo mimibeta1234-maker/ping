@@ -8,11 +8,11 @@ import {
   ChevronDown,
   ChevronUp,
   Layers,
-  Sparkles,
   SlidersHorizontal,
   X,
   Edit2,
   FileDown,
+  Compass,
 } from 'lucide-react';
 import { ChineseSplitResult, SplitChineseConfig, ProcessedChineseChapter } from '../types';
 import {
@@ -344,7 +344,7 @@ export const ChineseChapterList: React.FC<ChineseChapterListProps> = ({
         <div className="bg-pink-50/40 border border-pink-200/60 rounded-2xl p-3.5 sm:p-4 space-y-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2">
-              <Sparkles className="w-4 h-4 text-pink-500" />
+              <Compass className="w-4 h-4 text-pink-500" />
               <h3 className="text-xs font-bold text-pink-900 uppercase tracking-wider">
                 Đổi / Gán tên Phó Bản cho khoảng chương
               </h3>

@@ -3,6 +3,11 @@ import {
   SplitChineseConfig,
   ChineseSplitResult,
   ChineseParagraph,
+  AnalyzedTOCChapter,
+  AnalyzedArc,
+  TOCAnalysisResult,
+  DungeonBracketStyle,
+  ChapterPrefixType,
 } from '../types';
 
 export const DEFAULT_CHINESE_CONFIG: SplitChineseConfig = {
@@ -15,6 +20,7 @@ export const DEFAULT_CHINESE_CONFIG: SplitChineseConfig = {
   dialogueSafe: true,
   paragraphIndentation: true,
   autoStripExistingHeaders: true,
+  stripAuthorNotes: true,
 
   // Custom title & web metadata filter
   customTitlesToStrip: '',
@@ -25,7 +31,13 @@ export const DEFAULT_CHINESE_CONFIG: SplitChineseConfig = {
   dungeonName: '',
   dungeonStartIndex: 1,
   dungeonAutoDetect: true,
-  dungeonBracketStyle: 'half',
+  dungeonBracketStyle: 'suffix-omit-first',
+
+  // TOC Analysis & Transition Handling
+  useAnalyzedTOC: false,
+  analyzedChapterHeaders: [],
+  vhlTransitionMode: 'keep-original',
+  vhlTransitionCustomLabel: '现实',
 };
 
 /**
@@ -58,29 +70,71 @@ export interface DetectedDungeon {
   name: string;
   suggestedStartIndex: number;
   rawSample: string;
+  formatHint?: SplitChineseConfig['dungeonBracketStyle'];
 }
 
 /**
- * Extracts dungeon name and index from a raw header line (e.g. "第1章 恐怖高校（1）" or "Chương 5: Bệnh Viện (2)")
+ * Converts integer to Chinese numeral (1 -> 一, 2 -> 二, 10 -> 十, 15 -> 十五, 22 -> 二十二)
  */
-export function extractDungeonFromHeader(header: string): { name: string; index: number } | null {
+export function numberToChineseNumeral(num: number): string {
+  const digits = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
+  if (num >= 0 && num <= 10) return digits[num];
+  if (num > 10 && num < 20) return `十${digits[num % 10]}`;
+  if (num >= 20 && num < 100) {
+    const tens = Math.floor(num / 10);
+    const ones = num % 10;
+    return `${digits[tens]}十${ones > 0 ? digits[ones] : ''}`;
+  }
+  return String(num);
+}
+
+/**
+ * Extracts dungeon name and index from a raw header line:
+ * - "第一卷: 和平友爱族谱村 • 1,932 chữ • 2025-08-02"
+ * - "第2章 和平友爱族谱村2"
+ * - "第1章 和平友爱族谱村"
+ * - "第1章 恐怖高校（1）"
+ * - "Chương 5: Bệnh Viện (2)"
+ */
+export function extractDungeonFromHeader(
+  header: string
+): { name: string; index: number; formatHint?: SplitChineseConfig['dungeonBracketStyle'] } | null {
   if (!header || !header.trim()) return null;
   const cleaned = header.trim();
 
+  // Pattern 0: Volume / Arc format e.g. "第一卷: 和平友爱族谱村 • 1,932 chữ • 2025-08-02" or "第一卷 和平友爱族谱村"
+  const volumeMatch = cleaned.match(
+    /^(?:[0-9]{1,4}[.\s、\t]+)?(?:第\s*[0-9一二三四五六七八九十百千万]+\s*卷|分卷(?:阅读)?|卷\s*[0-9一二三四五六七八九十]+)\s*[:：\s]*([^\s•·|\-–—\n\r:：()（）【】]+)/i
+  );
+  if (volumeMatch && volumeMatch[1]) {
+    const vName = volumeMatch[1].trim();
+    if (vName && !/^(?:正文|默认|作品相关|VIP|免费章节|第[0-9一二三四五六七八九十]+章)$/i.test(vName)) {
+      return {
+        name: vName,
+        index: 1,
+        formatHint: 'suffix-omit-first',
+      };
+    }
+  }
+
   // Pattern 1: Chapter prefix + Dungeon Name + (1) or （1） or 【1】 or - 1
-  // e.g. 第1章 恐怖游乐园（1） | Chương 1: Bệnh Viện Ma (2) | 01. 绝命列车 (01)
   const pattern1 =
-    /(?:(?:第\s*[0-9一二三四五六七八九十百千万]+\s*[章回节篇])|(?:Chapter|Chương|Section)\s*\d+[:：\s]*|[0-9]{1,4}\s*[.、:：\-])?\s*([^()（）【】\n\r:：]+?)\s*(?:[（(【]([0-9一二三四五六七八九十]+)[)）】]|[-_]\s*([0-9]+))\s*$/i;
+    /^(?:[0-9]{1,4}[.\s、\t]+)?(?:(?:第\s*[0-9一二三四五六七八九十百千万]+\s*[章回节篇])|(?:Chapter|Chương|Section)\s*\d+[:：\s]*|[0-9]{1,4}\s*[.、:：\-])?\s*([^()（）【】\n\r:：]+?)\s*(?:[（(]([0-9一二三四五六七八九十]+)[)）]|【([0-9一二三四五六七八九十]+)】|[-_]\s*([0-9]+))\s*$/i;
 
   const match1 = cleaned.match(pattern1);
   if (match1) {
     const rawName = match1[1].trim();
-    const rawIdx = match1[2] || match1[3];
-    // Filter out generic words
+    const rawIdx = match1[2] || match1[3] || match1[4];
     if (rawName && !/^(?:正文|VIP|章节|Chapter|Chương)$/i.test(rawName)) {
+      let formatHint: SplitChineseConfig['dungeonBracketStyle'] = 'half';
+      if (cleaned.includes('（')) formatHint = 'full';
+      else if (cleaned.includes('【')) formatHint = 'bracket';
+      else if (cleaned.includes('-')) formatHint = 'dash';
+
       return {
         name: rawName.replace(/^[:：\-\—\s]+/, '').trim(),
         index: chineseNumeralToNumber(rawIdx),
+        formatHint,
       };
     }
   }
@@ -92,34 +146,77 @@ export function extractDungeonFromHeader(header: string): { name: string; index:
     return {
       name: match2[1].trim(),
       index: 1,
+      formatHint: 'suffix-omit-first',
     };
+  }
+
+  // Pattern 3: Chapter prefix + Dungeon Name + glued digit suffix (e.g. "第2章 和平友爱族谱村2" or "2 第2章 和平友爱族谱村2")
+  const pattern3 =
+    /^(?:[0-9]{1,4}[.\s、\t]+)?(?:第\s*[0-9一二三四五六七八九十百千万]+\s*[章回节篇]|Chapter\s*[0-9]+|Chương\s*[0-9]+|[0-9]{1,4}[.、:：\-])\s*[:：\-\—\s]*([^\s\d:：()（）【】]{2,30})\s*([0-9]{1,3}|[一二三四五六七八九十]{1,2})\s*$/i;
+  const match3 = cleaned.match(pattern3);
+  if (match3) {
+    const rawName = match3[1].trim();
+    const rawIdx = match3[2];
+    if (rawName && !/^(?:正文|VIP|章节|Chapter|Chương)$/i.test(rawName)) {
+      return {
+        name: rawName,
+        index: chineseNumeralToNumber(rawIdx),
+        formatHint: 'suffix-omit-first',
+      };
+    }
+  }
+
+  // Pattern 4: Chapter prefix + Dungeon Name (without suffix number, e.g. "第1章 和平友爱族谱村" or "1 第1章 和平友爱族谱村")
+  const pattern4 =
+    /^(?:[0-9]{1,4}[.\s、\t]+)?(?:第\s*[0-9一二三四五六七八九十百千万]+\s*[章回节篇]|Chapter\s*[0-9]+|Chương\s*[0-9]+|[0-9]{1,4}[.、:：\-])\s*[:：\-\—\s]+([^\s\d:：()（）【】]{2,30})\s*$/i;
+  const match4 = cleaned.match(pattern4);
+  if (match4) {
+    const rawName = match4[1].trim();
+    if (rawName && !/^(?:正文|VIP|章节|Chapter|Chương|无题|默认|第一章|第二章|第三章)$/i.test(rawName)) {
+      return {
+        name: rawName,
+        index: 1,
+        formatHint: 'suffix-omit-first',
+      };
+    }
   }
 
   return null;
 }
 
 /**
- * Scans the raw text and discovers all Dungeon names mentioned in headers
+ * Scans the raw text and discovers all Dungeon names mentioned in headers/volumes
  */
 export function scanDungeonsFromRaw(rawText: string): DetectedDungeon[] {
   if (!rawText) return [];
   const lines = rawText.split(/\r?\n/);
   const found: DetectedDungeon[] = [];
-  const seenNames = new Set<string>();
+  const nameMap = new Map<string, DetectedDungeon>();
 
   for (const line of lines) {
     const trimmed = line.trim();
-    if (trimmed.length > 80) continue;
+    if (!trimmed || trimmed.length > 90) continue;
 
     const detected = extractDungeonFromHeader(trimmed);
     if (detected && detected.name && detected.name.length >= 2) {
-      if (!seenNames.has(detected.name)) {
-        seenNames.add(detected.name);
-        found.push({
+      const existing = nameMap.get(detected.name);
+      if (!existing) {
+        const item: DetectedDungeon = {
           name: detected.name,
           suggestedStartIndex: detected.index || 1,
           rawSample: trimmed,
-        });
+          formatHint: detected.formatHint,
+        };
+        nameMap.set(detected.name, item);
+        found.push(item);
+      } else {
+        // If we see index 1, keep 1 as starting index
+        if (detected.index === 1 && existing.suggestedStartIndex !== 1) {
+          existing.suggestedStartIndex = 1;
+        }
+        if (detected.formatHint) {
+          existing.formatHint = detected.formatHint;
+        }
       }
     }
   }
@@ -128,10 +225,28 @@ export function scanDungeonsFromRaw(rawText: string): DetectedDungeon[] {
 }
 
 /**
- * Format dungeon index with specified bracket style: (1), （1）, 【1】, or - 1
+ * Format dungeon index with specified bracket style:
+ * - 'suffix-omit-first': C1 is '' (empty), C2 is '2', C3 is '3'... (e.g. 和平友爱族谱村, 和平友爱族谱村2)
+ * - 'suffix': '1', '2', '3'... (e.g. 和平友爱族谱村1, 和平友爱族谱村2)
+ * - 'space': ' 1', ' 2', ' 3'...
+ * - 'half': '(1)', '(2)', '(3)'...
+ * - 'full': '（1）', '（2）', '（3）'...
+ * - 'bracket': '【1】', '【2】', '【3】'...
+ * - 'dash': '- 1', '- 2', '- 3'...
+ * - 'chinese-bracket': '（一）', '（二）', '（三）'...
+ * - 'chinese-suffix': '一', '二', '三'...
  */
-export function formatDungeonBracket(index: number, style: SplitChineseConfig['dungeonBracketStyle']): string {
+export function formatDungeonBracket(
+  index: number,
+  style: SplitChineseConfig['dungeonBracketStyle'] = 'half'
+): string {
   switch (style) {
+    case 'suffix-omit-first':
+      return index <= 1 ? '' : `${index}`;
+    case 'suffix':
+      return `${index}`;
+    case 'space':
+      return ` ${index}`;
     case 'half':
       return `(${index})`;
     case 'full':
@@ -140,9 +255,304 @@ export function formatDungeonBracket(index: number, style: SplitChineseConfig['d
       return `【${index}】`;
     case 'dash':
       return `- ${index}`;
+    case 'chinese-bracket': {
+      const cn = numberToChineseNumeral(index);
+      return `（${cn}）`;
+    }
+    case 'chinese-suffix': {
+      const cn = numberToChineseNumeral(index);
+      return `${cn}`;
+    }
     default:
       return `(${index})`;
   }
+}
+
+export interface VHLAnalysisOptions {
+  vhlTransitionMode?: 'empty-title' | 'keep-original' | 'custom-label' | 'pure-number';
+  vhlTransitionCustomLabel?: string;
+  prefixFormat?: ChapterPrefixType;
+  customPrefix?: string;
+  forcedBracketStyle?: DungeonBracketStyle;
+}
+
+/**
+ * Powerful Table of Contents Analyzer for Infinite Flow (Vô Hạn Lưu):
+ * 1. Parses raw TOC lines, removes web metadata (word counts, dates, etc.)
+ * 2. Distinguishes Dungeon chapters from Transition / Real-World chapters
+ * 3. Identifies Arc boundaries, dungeon names, numbering styles
+ * 4. Generates formatted headers matching the novel's flow
+ */
+export function analyzeVHLTableOfContents(
+  rawTOC: string,
+  options: VHLAnalysisOptions = {}
+): TOCAnalysisResult {
+  const transitionMode = options.vhlTransitionMode || 'keep-original';
+  const transitionLabel = options.vhlTransitionCustomLabel || '现实';
+  const prefixFormat = options.prefixFormat || 'di-zhang';
+  const customPrefix = options.customPrefix || '第 {n} 章';
+
+  if (!rawTOC || !rawTOC.trim()) {
+    return {
+      totalAnalyzed: 0,
+      dungeonChaptersCount: 0,
+      transitionChaptersCount: 0,
+      arcs: [],
+      chapters: [],
+    };
+  }
+
+  const lines = rawTOC.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+
+  interface RawCandidate {
+    lineIndex: number;
+    raw: string;
+    chapterNum?: number;
+    titlePart: string;
+  }
+
+  const candidates: RawCandidate[] = [];
+  const knownVolumeDungeons: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i].trim();
+    if (!raw) continue;
+
+    // Volume detection e.g. "第一卷: 和平友爱族谱村 • 1,932 chữ • 2025-08-02"
+    const volMatch = raw.match(
+      /^(?:[0-9]{1,4}[.\s、\t]+)?(?:第\s*[0-9一二三四五六七八九十百千万]+\s*卷|分卷(?:阅读)?|卷\s*[0-9一二三四五六七八九十]+)\s*[:：\s]*([^\s•·|\-–—\n\r:：()（）【】]+)/i
+    );
+    if (volMatch && volMatch[1]) {
+      const vName = volMatch[1].trim();
+      if (vName && !/^(?:正文|默认|作品相关|VIP|免费章节)$/i.test(vName)) {
+        if (!knownVolumeDungeons.includes(vName)) {
+          knownVolumeDungeons.push(vName);
+        }
+      }
+    }
+
+    // Skip pure web metadata lines
+    if (isWebMetadataLine(raw)) {
+      continue;
+    }
+
+    // Skip standalone digits if followed by a chapter header
+    if (
+      /^[0-9]{1,5}$/.test(raw) &&
+      i + 1 < lines.length &&
+      /第\s*[0-9一二三四五六七八九十]+\s*章|Chapter|Chương/i.test(lines[i + 1])
+    ) {
+      continue;
+    }
+
+    // Extract chapter number & title part
+    const chapRegex =
+      /^(?:([0-9]{1,5})\s+[.\s、\t]*)?(?:(?:第\s*([0-9一二三四五六七八九十百千万]+)\s*[章回节篇集卷部话折])|(?:Chapter|Chương|Section)\s*([0-9]+)|([0-9]{1,5})\s*[.、:：\-])\s*[:：\-\—\s]*(.*)$/i;
+    const match = raw.match(chapRegex);
+
+    let chapNum: number | undefined = undefined;
+    let titlePart = raw;
+
+    if (match) {
+      const numStr = match[2] || match[3] || match[4] || match[1];
+      if (numStr) {
+        chapNum = chineseNumeralToNumber(numStr);
+      }
+      titlePart = (match[5] || '').trim();
+    } else {
+      titlePart = raw;
+    }
+
+    candidates.push({
+      lineIndex: i,
+      raw,
+      chapterNum: chapNum,
+      titlePart,
+    });
+  }
+
+  // Frequency analysis to distinguish Dungeon names from Transition titles
+  const dungeonFrequencyMap = new Map<string, number>();
+
+  for (const c of candidates) {
+    const dInfo = extractDungeonFromHeader(c.raw) || extractDungeonFromHeader(c.titlePart);
+    if (dInfo && dInfo.name) {
+      dungeonFrequencyMap.set(dInfo.name, (dungeonFrequencyMap.get(dInfo.name) || 0) + 1);
+    }
+  }
+
+  for (const vName of knownVolumeDungeons) {
+    dungeonFrequencyMap.set(vName, (dungeonFrequencyMap.get(vName) || 0) + 5);
+  }
+
+  const transitionRegex =
+    /(?:现实|日常|过度|过渡|休憩|休息|结算|抽奖|回归|准备|整顿|番外|总结|Interlude|Real\s*World|Hiện\s*thực|Kết\s*toán|Nghỉ\s*ngơi)/i;
+
+  const parsedChapters: AnalyzedTOCChapter[] = [];
+  let runningChapIndex = 1;
+  let transitionRunningIndex = 1;
+
+  for (let idx = 0; idx < candidates.length; idx++) {
+    const c = candidates[idx];
+    const chapNum =
+      c.chapterNum !== undefined && c.chapterNum > 0 ? c.chapterNum : runningChapIndex;
+    runningChapIndex = chapNum + 1;
+
+    const dInfo = extractDungeonFromHeader(c.raw) || extractDungeonFromHeader(c.titlePart);
+    let isDungeon = false;
+    let dName = '';
+    let dIndex = 1;
+    let dFormat: DungeonBracketStyle = options.forcedBracketStyle || 'suffix-omit-first';
+
+    if (dInfo && dInfo.name) {
+      const freq = dungeonFrequencyMap.get(dInfo.name) || 0;
+      if (
+        freq >= 2 ||
+        (dInfo.formatHint && dInfo.formatHint !== 'suffix-omit-first') ||
+        knownVolumeDungeons.includes(dInfo.name)
+      ) {
+        isDungeon = true;
+        dName = dInfo.name;
+        dIndex = dInfo.index || 1;
+        dFormat = options.forcedBracketStyle || dInfo.formatHint || 'suffix-omit-first';
+      } else if (!transitionRegex.test(c.titlePart) && freq >= 1) {
+        isDungeon = true;
+        dName = dInfo.name;
+        dIndex = dInfo.index || 1;
+        dFormat = options.forcedBracketStyle || dInfo.formatHint || 'suffix-omit-first';
+      }
+    }
+
+    if (!isDungeon) {
+      for (const [knownName] of dungeonFrequencyMap.entries()) {
+        if (c.titlePart.includes(knownName)) {
+          isDungeon = true;
+          dName = knownName;
+          const suffixNumMatch = c.titlePart
+            .slice(c.titlePart.indexOf(knownName) + knownName.length)
+            .match(/^[^\d]*(\d+)/);
+          dIndex = suffixNumMatch ? parseInt(suffixNumMatch[1], 10) : 1;
+          dFormat = options.forcedBracketStyle || 'suffix-omit-first';
+          break;
+        }
+      }
+    }
+
+    let pfx = '';
+    if (prefixFormat === 'chuong') {
+      pfx = `Chương ${chapNum}:`;
+    } else if (prefixFormat === 'di-hui') {
+      pfx = `第 ${chapNum} 回`;
+    } else if (prefixFormat === 'custom') {
+      pfx = customPrefix.replace('{n}', String(chapNum));
+    } else {
+      pfx = `第 ${chapNum} 章`;
+    }
+
+    if (isDungeon) {
+      transitionRunningIndex = 1;
+      const bracketStr = formatDungeonBracket(dIndex, dFormat);
+      let formatted = '';
+      if (
+        dFormat === 'suffix-omit-first' ||
+        dFormat === 'suffix' ||
+        dFormat === 'chinese-suffix'
+      ) {
+        formatted =
+          prefixFormat === 'chuong'
+            ? `${pfx} ${dName}${bracketStr}`
+            : `${pfx} ${dName}${bracketStr}`;
+      } else if (dFormat === 'space') {
+        formatted = `${pfx} ${dName}${bracketStr}`;
+      } else {
+        formatted = `${pfx} ${dName} ${bracketStr}`;
+      }
+
+      parsedChapters.push({
+        rawLine: c.raw,
+        chapterIndex: chapNum,
+        type: 'dungeon',
+        dungeonName: dName,
+        dungeonIndex: dIndex,
+        detectedFormat: dFormat,
+        originalTitle: c.titlePart || dName,
+        formattedHeader: formatted.trim(),
+      });
+    } else {
+      // Transition chapter!
+      let formatted = '';
+      if (transitionMode === 'empty-title' || transitionMode === 'pure-number') {
+        // Pure chapter number, no sub-title (để trống tên chương)
+        formatted = pfx;
+      } else if (transitionMode === 'keep-original') {
+        const cleanTitle = c.titlePart || '现实世界';
+        formatted =
+          prefixFormat === 'chuong' ? `${pfx} ${cleanTitle}` : `${pfx} ${cleanTitle}`;
+      } else if (transitionMode === 'custom-label') {
+        const bracketStr = formatDungeonBracket(transitionRunningIndex, 'half');
+        formatted =
+          prefixFormat === 'chuong'
+            ? `${pfx} ${transitionLabel} ${bracketStr}`
+            : `${pfx} ${transitionLabel} ${bracketStr}`;
+        transitionRunningIndex++;
+      } else {
+        formatted = pfx;
+      }
+
+      parsedChapters.push({
+        rawLine: c.raw,
+        chapterIndex: chapNum,
+        type: 'transition',
+        originalTitle: c.titlePart || 'Chương quá độ',
+        formattedHeader: formatted.trim(),
+      });
+    }
+  }
+
+  // Group into contiguous Arcs
+  const arcs: AnalyzedArc[] = [];
+  let currentArc: AnalyzedArc | null = null;
+
+  for (const ch of parsedChapters) {
+    const arcKey =
+      ch.type === 'dungeon' ? ch.dungeonName || 'Phó bản' : 'Quá độ / Hiện thực';
+    if (!currentArc || currentArc.name !== arcKey || currentArc.type !== ch.type) {
+      if (currentArc) {
+        arcs.push(currentArc);
+      }
+      currentArc = {
+        type: ch.type,
+        name: arcKey,
+        startChapter: ch.chapterIndex,
+        endChapter: ch.chapterIndex,
+        totalChapters: 1,
+        format: ch.detectedFormat,
+        samples: [ch.formattedHeader],
+      };
+    } else {
+      currentArc.endChapter = ch.chapterIndex;
+      currentArc.totalChapters++;
+      if (currentArc.samples.length < 3) {
+        currentArc.samples.push(ch.formattedHeader);
+      }
+    }
+  }
+  if (currentArc) {
+    arcs.push(currentArc);
+  }
+
+  const dungeonChaptersCount = parsedChapters.filter((c) => c.type === 'dungeon').length;
+  const transitionChaptersCount = parsedChapters.filter(
+    (c) => c.type === 'transition'
+  ).length;
+
+  return {
+    totalAnalyzed: parsedChapters.length,
+    dungeonChaptersCount,
+    transitionChaptersCount,
+    arcs,
+    chapters: parsedChapters,
+  };
 }
 
 /**
@@ -167,11 +577,11 @@ export function countPureHanzi(text: string): number {
  * Regex patterns identifying existing chapter headers in raw Chinese text
  */
 const CHAPTER_HEADER_PATTERNS: RegExp[] = [
-  // Standalone: 第1章, 第一千二百章 逆天改命, 第 001 章：天道崩塌
-  /^\s*(?:[=*-]{2,}\s*)?(?:【|\[|\()?\s*(?:正文\s*|VIP\s*|VIP章节\s*)?第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]\s*(?:】|\]|\))?(?:\s*[:：\-\—\s].*|\s+.*)?(?:\s*[=*-]{2,})?\s*$/i,
+  // Standalone: 第1章, 第一千二百章 逆天改命, 第 001 章：天道崩塌, 1 第1章 和平友爱族谱村, 2 第2章 和平友爱族谱村2
+  /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*-]{2,}\s*)?(?:【|\[|\()?\s*(?:正文\s*|VIP\s*|VIP章节\s*)?第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]\s*(?:】|\]|\))?(?:\s*[:：\-\—\s].*|\s+.*)?(?:\s*[=*-]{2,})?\s*$/i,
 
   // Standalone: Chapter 1, Chương 1: Bí Mật, Section 1
-  /^\s*(?:[=*-]{2,}\s*)?(?:Chapter|CHAPTER|Chương|CHƯƠNG|Section|SECTION)\s*[0-9]+(?:\s*[:：\-\—\s].*|\s+.*)?(?:\s*[=*-]{2,})?\s*$/i,
+  /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*-]{2,}\s*)?(?:Chapter|CHAPTER|Chương|CHƯƠNG|Section|SECTION)\s*[0-9]+(?:\s*[:：\-\—\s].*|\s+.*)?(?:\s*[=*-]{2,})?\s*$/i,
 
   // Standalone: 1、林轩觉醒, 001. 重生都市, 1. 逃出生天, 1: 诡异降临
   /^\s*[0-9]{1,5}\s*[、.：:\-\—]\s*[\u4e00-\u9fa5a-zA-Z0-9\s（）()【】\-—]{1,45}\s*$/,
@@ -188,9 +598,213 @@ const CHAPTER_HEADER_PATTERNS: RegExp[] = [
   // Standalone: === 第1章 ===, *** Chapter 1 ***
   /^\s*[=*-]{2,}\s*.*?(?:第.+?[章回节]|Chapter|Chương|[0-9]{1,4}).*?\s*[=*-]{2,}\s*$/i,
 
-  // Standalone short section markers: 卷一、分卷阅读
-  /^\s*(?:卷[0-9一二三四五六七八九十百千万零两]+|分卷阅读[0-9一二三四五六七八九十百千万零两]*|作品相关|序章|楔子|引子|尾声|番外[0-9一二三四五六七八九十百千万零两]*)\s*(?:[:：\-\—\s].*)?\s*$/,
+  // Standalone short section markers: 卷一、分卷阅读, 第一卷: 和平友爱族谱村
+  /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:卷[0-9一二三四五六七八九十百千万零两]+|第\s*[0-9一二三四五六七八九十百千万零两]+\s*卷|分卷阅读[0-9一二三四五六七八九十百千万零两]*|作品相关|序章|楔子|引子|尾声|番外[0-9一二三四五六七八九十百千万零两]*)\s*(?:[:：\-\—\s].*)?\s*$/,
 ];
+
+/**
+ * Strips author notes (lời tác giả / 作话 / 作者有话说 / 题外话 / PS) safely and precisely from raw Chinese text.
+ * Spans from "作者有话说：" (or 作话 / 题外话 / PS) all the way until the next chapter header
+ * in the original text (e.g. 第一章, 第1章, Chapter 1, 1., etc. depending on the story), or EOF.
+ */
+export function stripAuthorNotes(rawText: string): string {
+  if (!rawText || !rawText.trim()) return '';
+
+  let text = rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+  // 1. Remove bracketed author note blocks self-contained inside brackets with colon / content
+  // e.g. 【作者有话说：...】, 【作话：...】, 【作者题外话：...】, 【作家想说的话：...】
+  text = text.replace(
+    /【\s*(?:作者\s*(?:有话说|题外话|留言|唠叨|碎碎念|碎念|想说的话|唠嗑|的话)|作话|题外话|作家想说的话|作家的话|彩蛋章|本章说|感谢名单|加更说明)\s*[:：][^】]{0,800}】/g,
+    ''
+  );
+  text = text.replace(
+    /\[\s*(?:作者\s*(?:有话说|题外话|留言|唠叨|碎碎念|碎念|想说的话|的话)|作话|题外话)\s*[:：][^\]\n]{0,300}\]/g,
+    ''
+  );
+  text = text.replace(
+    /[（\(]\s*(?:作者\s*(?:有话说|题外话|留言|唠叨|碎碎念|碎念|想说的话|菌|君|注|的话)|作话|题外话|PS|ps)\s*[:：]?[^）\)\n]{0,300}[）\)]/g,
+    ''
+  );
+
+  const lines = text.split('\n');
+  const resultLines: string[] = [];
+  let inAuthorNoteBlock = false;
+
+  // Chapter header patterns to safely exit author note block and preserve the new chapter
+  // Covers: 第一章, 第1章, 1., 01, Chapter 1, Chương 1, 【第1章】, 一、, etc.
+  const isChapterHeader = (trimmedLine: string): boolean => {
+    if (!trimmedLine || trimmedLine.length > 80) return false;
+    // Lines ending with dialogue colons or opening quotes are dialogue/story narrative
+    if (/[:：]\s*$/.test(trimmedLine) || /[“"「『]$/.test(trimmedLine)) return false;
+
+    // Fast check against existing chapter header detector
+    if (isExistingChapterHeaderLine(trimmedLine)) return true;
+
+    // 1. 第...章/回/节/篇/集/卷/部/话/折 (e.g. 第一章, 第1章, 1 第1章, 正文 第一章, 【第1章】)
+    if (
+      /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*-]{2,}\s*)?(?:【|\[|\()?\s*(?:正文\s*|VIP\s*|VIP章节\s*)?第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]/i.test(
+        trimmedLine
+      )
+    ) {
+      return true;
+    }
+
+    // 2. Chapter / Chương / Section
+    if (
+      /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*-]{2,}\s*)?(?:Chapter|CHAPTER|Chương|CHƯƠNG|Section|SECTION)\s*[0-9]+/i.test(
+        trimmedLine
+      )
+    ) {
+      return true;
+    }
+
+    // 3. Numbered: 1. , 1、, 01. , 1: , 1 - 
+    if (
+      /^\s*[0-9]{1,5}\s*[、.：:\-\—\s]\s*[\u4e00-\u9fa5a-zA-Z0-9\s（）()【】\-—]{1,45}\s*$/.test(
+        trimmedLine
+      )
+    ) {
+      return true;
+    }
+
+    // 4. Standalone pure number: 1, 2, 01, 001
+    if (/^\s*[0-9]{1,5}\s*$/.test(trimmedLine)) {
+      return true;
+    }
+
+    // 5. Chinese numeral header: 一、, 二、, 一. 
+    if (
+      /^\s*[一二三四五六七八九十百千万]+\s*[、.：:\-\—\s]\s*[\u4e00-\u9fa5a-zA-Z0-9\s]{1,40}\s*$/.test(
+        trimmedLine
+      )
+    ) {
+      return true;
+    }
+
+    // 6. Bracketed chapter/index: 【第1章】, 【1】, [1], （1）
+    if (
+      /^\s*[【\[\(][^】\]\)]*(?:第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]|Chapter|Chương|[0-9]{1,4})[^】\]\)]*[】\]\)]\s*$/i.test(
+        trimmedLine
+      )
+    ) {
+      return true;
+    }
+
+    // 7. Divider chapter header: === 第1章 ===, *** 第一章 ***
+    if (
+      /^\s*[=*-]{2,}\s*.*?(?:第.+?[章回节]|Chapter|Chương|[0-9]{1,4}).*?\s*[=*-]{2,}\s*$/i.test(
+        trimmedLine
+      )
+    ) {
+      return true;
+    }
+
+    // 8. Special section markers: 序章, 楔子, 引子, 尾声, 番外, 后记, 作品相关
+    if (
+      /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:卷[0-9一二三四五六七八九十百千万零两]+|第\s*[0-9一二三四五六七八九十百千万零两]+\s*卷|分卷阅读[0-9一二三四五六七八九十百千万零两]*|作品相关|序章|楔子|引子|尾声|番外[0-9一二三四五六七八九十百千万零两]*|后记)\s*(?:[:：\-\—\s].*)?\s*$/.test(
+        trimmedLine
+      )
+    ) {
+      return true;
+    }
+
+    return false;
+  };
+
+  // Author note start marker:
+  // e.g. 作者有话说：, 作者有话说:, 作者有话说, 【作者有话说】, 作话：, 题外话：, PS：, etc.
+  const isAuthorNoteStart = (trimmedLine: string): boolean => {
+    if (!trimmedLine) return false;
+    // Dialogue quotes do not start author notes
+    if (/^[“"「『]/.test(trimmedLine)) return false;
+
+    // Pattern A: Standalone or with colon: "作者有话说：...", "【作者有话说】", "作话：...", "题外话：..."
+    const keywordPattern =
+      /^(?:[=*-~#]{2,}\s*)?(?:【|\[|\(|（)?\s*(?:作者\s*(?:有话说|题外话|留言|唠叨|碎碎念|碎念|想说的话|唠嗑|菌说|君说|的话)|作话|题外话|作家想说的话|作家的话|彩蛋章|感谢名单|加更说明)\s*(?:】|\]|\)|）)?\s*[:：]?/i;
+    if (keywordPattern.test(trimmedLine)) {
+      return true;
+    }
+
+    // Pattern B: Standalone author line: "作者：" / "作者:"
+    if (/^(?:[=*-~#]{2,}\s*)?(?:【|\[|\(|（)?\s*作者\s*(?:】|\]|\)|）)?\s*[:：]/i.test(trimmedLine)) {
+      return true;
+    }
+
+    // Pattern C: PS lines: "PS：", "ps:", "P.S:"
+    if (/^(?:[=*-~#]{2,}\s*)?(?:[（\(【\[])?\s*(?:PS|ps|P\.S|p\.s)\s*[:：]/i.test(trimmedLine)) {
+      return true;
+    }
+
+    return false;
+  };
+
+  // Chapter end markers: (本章完), 【本章完】, ===本章完===
+  const chapterEndMarkerRegex =
+    /^\s*(?:[=*-~#]{2,}\s*)?(?:【|\[|\(|（)?\s*(?:本章完|全书完|完结|正文完)\s*(?:】|\]|\)|）)?(?:\s*[=*-~#]{2,})?\s*$/;
+
+  // Pure vote / recommendation begs
+  const voteBegRegex =
+    /^\s*(?:求推荐票|求月票|求催更|求为爱发电|求收藏|求花花|求追读|求好评|求打赏|求票票|感谢大家投喂)\s*[!！~。…]*$/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      if (!inAuthorNoteBlock) {
+        resultLines.push('');
+      }
+      // Blank lines inside author note block are part of the note and skipped
+      continue;
+    }
+
+    // Check if this line is a new chapter header (e.g. 第一章, 第1章, 1., etc.)
+    if (isChapterHeader(trimmed)) {
+      if (inAuthorNoteBlock) {
+        // Exited author note block: the author note ended right before this chapter!
+        inAuthorNoteBlock = false;
+      }
+      resultLines.push(line);
+      continue;
+    }
+
+    // If we are currently inside an author note block:
+    if (inAuthorNoteBlock) {
+      // Check for standalone chapter end markers (just in case)
+      if (trimmed.length <= 30 && chapterEndMarkerRegex.test(trimmed)) {
+        continue;
+      }
+      // Everything inside author note block is skipped until next chapter header
+      continue;
+    }
+
+    // Check if this line starts an author note
+    if (isAuthorNoteStart(trimmed)) {
+      inAuthorNoteBlock = true;
+      continue;
+    }
+
+    // Standalone chapter end markers: (本章完), 【本章完】
+    if (trimmed.length <= 30 && chapterEndMarkerRegex.test(trimmed)) {
+      continue;
+    }
+
+    // Standalone vote / beg lines
+    if (trimmed.length <= 30 && voteBegRegex.test(trimmed)) {
+      continue;
+    }
+
+    resultLines.push(line);
+  }
+
+  // Clean trailing blank lines
+  while (resultLines.length > 0 && !resultLines[resultLines.length - 1].trim()) {
+    resultLines.pop();
+  }
+
+  return resultLines.join('\n');
+}
 
 /**
  * Checks if a standalone line is an existing chapter header
@@ -209,20 +823,20 @@ export function isExistingChapterHeaderLine(line: string): boolean {
 }
 
 /**
- * Identifies web metadata lines common on web novel platforms (e.g. "第一卷: 默认 • 3,347 chữ • 2026-04-08")
+ * Identifies web metadata lines common on web novel platforms (e.g. "第一卷: 和平友爱族谱村 • 1,932 chữ • 2025-08-02")
  */
 export function isWebMetadataLine(line: string): boolean {
   if (!line || !line.trim()) return false;
   const trimmed = line.trim();
-  if (trimmed.length > 100) return false;
+  if (trimmed.length > 120) return false;
 
-  // Pattern: "第一卷: 默认 • 3,347 chữ • 2026-04-08" or "第一卷: 默认" or "第1卷: 正文"
-  if (/^\s*(?:第\s*[0-9一二三四五六七八九十百千万]+\s*卷|分卷(?:阅读)?|卷\s*[0-9一二三四五六七八九十]+)\s*[:：\s]/i.test(trimmed)) {
+  // Pattern: "第一卷: 和平友爱族谱村 • 1,932 chữ • 2025-08-02" or "第一卷: 默认" or "第1卷: 正文"
+  if (/^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:第\s*[0-9一二三四五六七八九十百千万]+\s*卷|分卷(?:阅读)?|卷\s*[0-9一二三四五六七八九十]+)\s*[:：\s]/i.test(trimmed)) {
     return true;
   }
 
-  // Pattern: contains bullet points with word counts and dates: "3,347 chữ • 2026-04-08"
-  if (/^\s*.*?(?:chữ|字|Words|words)\s*[•·|\-]\s*[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}/i.test(trimmed)) {
+  // Pattern: contains bullet points with word counts and dates: "• 1,932 chữ • 2025-08-02" or "3,347 chữ • 2026-04-08"
+  if (/^\s*.*?(?:chữ|字|Words|words)\s*[•·|\-–—]\s*[0-9]{4}[-/][0-9]{2}[-/][0-9]{2}/i.test(trimmed)) {
     return true;
   }
 
@@ -486,16 +1100,34 @@ export function formatChapterHeader(
   if (config.enableInfiniteFlow) {
     const dName = (dungeonName !== undefined ? dungeonName : config.dungeonName || '').trim();
     const dIdx = dungeonIndex !== undefined ? dungeonIndex : config.dungeonStartIndex || 1;
-    const bracket = formatDungeonBracket(dIdx, config.dungeonBracketStyle || 'half');
+    const style = config.dungeonBracketStyle || 'half';
+    const bracketOrSuffix = formatDungeonBracket(dIdx, style);
 
     if (dName) {
-      if (config.prefixFormat === 'chuong') {
-        fullHeader = `${headerPrefix}: ${dName} ${bracket}`;
+      if (style === 'suffix-omit-first' || style === 'suffix' || style === 'chinese-suffix') {
+        // Direct glued suffix: e.g. "第 1 章 和平友爱族谱村" (c1) or "第 2 章 和平友爱族谱村2" (c2)
+        if (config.prefixFormat === 'chuong') {
+          fullHeader = `${headerPrefix}: ${dName}${bracketOrSuffix}`;
+        } else {
+          fullHeader = `${headerPrefix} ${dName}${bracketOrSuffix}`;
+        }
+      } else if (style === 'space') {
+        // Spaced suffix: e.g. "第 1 章 和平友爱族谱村 1"
+        if (config.prefixFormat === 'chuong') {
+          fullHeader = `${headerPrefix}: ${dName}${bracketOrSuffix}`;
+        } else {
+          fullHeader = `${headerPrefix} ${dName}${bracketOrSuffix}`;
+        }
       } else {
-        fullHeader = `${headerPrefix} ${dName} ${bracket}`;
+        // Bracketed styles e.g. "第 1 章 和平友爱族谱村 (1)" or "Chương 1: 和平友爱族谱村 (1)"
+        if (config.prefixFormat === 'chuong') {
+          fullHeader = `${headerPrefix}: ${dName} ${bracketOrSuffix}`;
+        } else {
+          fullHeader = `${headerPrefix} ${dName} ${bracketOrSuffix}`;
+        }
       }
     } else {
-      fullHeader = `${headerPrefix} ${bracket}`;
+      fullHeader = bracketOrSuffix ? `${headerPrefix} ${bracketOrSuffix}` : headerPrefix;
     }
   }
 
@@ -522,7 +1154,8 @@ export function parseRawIntoBlocksWithDungeon(
   rawText: string,
   autoDetectDungeon = false,
   customTitlesToStrip = '',
-  stripWebMetadata = true
+  stripWebMetadata = true,
+  stripAuthorNotesEnabled = true
 ): {
   blocks: BlockWithMetadata[];
   detectedDungeons: DetectedDungeon[];
@@ -532,9 +1165,15 @@ export function parseRawIntoBlocksWithDungeon(
     return { blocks: [], detectedDungeons: [], strippedCount: 0 };
   }
 
+  // If author note stripping is enabled, sanitize raw text first
+  let processedText = rawText;
+  if (stripAuthorNotesEnabled) {
+    processedText = stripAuthorNotes(processedText);
+  }
+
   const customTitleSet = extractCustomTitlesSet(customTitlesToStrip);
 
-  const normalized = rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const normalized = processedText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   const lines = normalized.split('\n');
 
   const blocks: BlockWithMetadata[] = [];
@@ -544,14 +1183,37 @@ export function parseRawIntoBlocksWithDungeon(
 
   // Regex to strip inline chapter prefixes if a line starts with "第1章 惊变 ... "
   const inlineHeaderRegex =
-    /^\s*(?:[=*-]{2,}\s*)?(?:【|\[|\()?\s*(?:正文\s*|VIP\s*|VIP章节\s*)?第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]\s*(?:】|\]|\))?(?:\s*[:：\-\—\s][^\n\u3000]{1,35})?\s+(?=[“「『\u4e00-\u9fa5a-zA-Z0-9])/;
+    /^\s*(?:[0-9]{1,5}\s*[.\s、\t]+)?(?:[=*-]{2,}\s*)?(?:【|\[|\()?\s*(?:正文\s*|VIP\s*|VIP章节\s*)?第\s*[0-9一二三四五六七八九十百千万零两]+\s*[章回节篇集卷部话折]\s*(?:】|\]|\))?(?:\s*[:：\-\—\s][^\n\u3000]{1,35})?\s+(?=[“「『\u4e00-\u9fa5a-zA-Z0-9])/;
+
+  const transitionRegex =
+    /(?:现实|日常|过度|过渡|休憩|休息|结算|抽奖|回归|准备|整顿|番外|总结|Interlude|Real\s*World|Hiện\s*thực|Kết\s*toán|Nghỉ\s*ngơi)/i;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     let trimmed = line.trim();
     if (!trimmed) continue;
 
-    // 1. Check if line is a web metadata line (e.g. "第一卷: 默认 • 3,347 chữ • 2026-04-08")
+    // 0. Auto-detect dungeon or transition on ANY header or volume line before filtering
+    if (autoDetectDungeon) {
+      if (transitionRegex.test(trimmed)) {
+        currentActiveDungeon = undefined;
+      } else {
+        const dInfo = extractDungeonFromHeader(trimmed);
+        if (dInfo && dInfo.name) {
+          currentActiveDungeon = dInfo.name;
+          if (!detectedDungeons.some((d) => d.name === dInfo.name)) {
+            detectedDungeons.push({
+              name: dInfo.name,
+              suggestedStartIndex: dInfo.index || 1,
+              rawSample: trimmed,
+              formatHint: dInfo.formatHint,
+            });
+          }
+        }
+      }
+    }
+
+    // 1. Check if line is a web metadata line (e.g. "第一卷: 和平友爱族谱村 • 1,932 chữ • 2025-08-02")
     if (stripWebMetadata && isWebMetadataLine(trimmed)) {
       strippedCount++;
       continue;
@@ -569,19 +1231,6 @@ export function parseRawIntoBlocksWithDungeon(
     // 3. Check if line is an isolated standard chapter header
     if (isExistingChapterHeaderLine(trimmed)) {
       strippedCount++;
-      if (autoDetectDungeon) {
-        const dInfo = extractDungeonFromHeader(trimmed);
-        if (dInfo && dInfo.name) {
-          currentActiveDungeon = dInfo.name;
-          if (!detectedDungeons.some((d) => d.name === dInfo.name)) {
-            detectedDungeons.push({
-              name: dInfo.name,
-              suggestedStartIndex: dInfo.index || 1,
-              rawSample: trimmed,
-            });
-          }
-        }
-      }
       continue; // Skip the header itself
     }
 
@@ -592,15 +1241,20 @@ export function parseRawIntoBlocksWithDungeon(
         const headerPart = match[0].trim();
         strippedCount++;
         if (autoDetectDungeon) {
-          const dInfo = extractDungeonFromHeader(headerPart);
-          if (dInfo && dInfo.name) {
-            currentActiveDungeon = dInfo.name;
-            if (!detectedDungeons.some((d) => d.name === dInfo.name)) {
-              detectedDungeons.push({
-                name: dInfo.name,
-                suggestedStartIndex: dInfo.index || 1,
-                rawSample: headerPart,
-              });
+          if (transitionRegex.test(headerPart)) {
+            currentActiveDungeon = undefined;
+          } else {
+            const dInfo = extractDungeonFromHeader(headerPart);
+            if (dInfo && dInfo.name) {
+              currentActiveDungeon = dInfo.name;
+              if (!detectedDungeons.some((d) => d.name === dInfo.name)) {
+                detectedDungeons.push({
+                  name: dInfo.name,
+                  suggestedStartIndex: dInfo.index || 1,
+                  rawSample: headerPart,
+                  formatHint: dInfo.formatHint,
+                });
+              }
             }
           }
         }
@@ -652,7 +1306,8 @@ export function splitRawIntoChineseChapters(
     rawText,
     config.enableInfiniteFlow && config.dungeonAutoDetect,
     config.customTitlesToStrip,
-    config.stripWebMetadata
+    config.stripWebMetadata,
+    config.stripAuthorNotes !== false
   );
 
   if (blocks.length === 0) {
@@ -676,7 +1331,7 @@ export function splitRawIntoChineseChapters(
 
   // Infinite flow dungeon tracking state
   let currentDungeonName =
-    config.dungeonName.trim() ||
+    (config.dungeonName ? config.dungeonName.trim() : '') ||
     (detectedDungeons.length > 0 ? detectedDungeons[0].name : '');
   let currentDungeonIndex = config.dungeonStartIndex || 1;
 
@@ -781,9 +1436,8 @@ export function splitRawIntoChineseChapters(
     }
 
     // Slice blocks for this chapter
-    const chapterBlockTexts = blocks
-      .slice(currentBlockIndex, chosenEndIndex)
-      .map((b) => b.text);
+    const currentSlice = blocks.slice(currentBlockIndex, chosenEndIndex);
+    const chapterBlockTexts = currentSlice.map((b) => b.text);
 
     const formattedParagraphs = config.paragraphIndentation
       ? chapterBlockTexts.map((b) =>
@@ -794,22 +1448,87 @@ export function splitRawIntoChineseChapters(
     const chapterContent = formattedParagraphs.join('\n\n');
     const chapterChars = countChineseChars(chapterContent);
 
-    const activeDName = config.enableInfiniteFlow ? currentDungeonName : undefined;
-    const activeDIdx = config.enableInfiniteFlow ? currentDungeonIndex : undefined;
+    // Majority Content Analysis for Infinite Flow:
+    // If a split chapter contains mixed content (dungeon vs transition/real-world),
+    // calculate character counts for each. Whichever has the majority percentage (> 50%) wins:
+    // - If dungeon characters > transition/undefined characters: label with dungeon name.
+    // - If transition/undefined characters >= dungeon characters: empty title / no dungeon name.
+    let activeDName: string | undefined = undefined;
+    let activeDIdx: number | undefined = undefined;
 
-    const { header, title } = formatChapterHeader(
-      currentChapterNum,
-      config,
-      chapterChars,
-      activeDName,
-      activeDIdx
-    );
+    if (config.enableInfiniteFlow) {
+      if (config.dungeonAutoDetect) {
+        let dungeonCharCount = 0;
+        let undefinedCharCount = 0;
+        const dungeonNameCounts = new Map<string, number>();
+
+        for (const block of currentSlice) {
+          const bChars = countChineseChars(block.text);
+          if (block.dungeonName) {
+            dungeonCharCount += bChars;
+            dungeonNameCounts.set(
+              block.dungeonName,
+              (dungeonNameCounts.get(block.dungeonName) || 0) + bChars
+            );
+          } else {
+            undefinedCharCount += bChars;
+          }
+        }
+
+        if (dungeonCharCount > undefinedCharCount) {
+          // Dungeon is majority: pick the dominant dungeon name in this chapter
+          let dominantDungeon = currentDungeonName;
+          let maxDChars = 0;
+          for (const [dName, count] of dungeonNameCounts.entries()) {
+            if (count > maxDChars) {
+              maxDChars = count;
+              dominantDungeon = dName;
+            }
+          }
+          activeDName = dominantDungeon;
+          activeDIdx = currentDungeonIndex;
+        } else {
+          // Transition/real-world is majority: leave title empty (no dungeon name)
+          activeDName = undefined;
+          activeDIdx = undefined;
+        }
+      } else {
+        // Auto-detect disabled: standard manual dungeon mode
+        activeDName = currentDungeonName || undefined;
+        activeDIdx = activeDName ? currentDungeonIndex : undefined;
+      }
+    }
+
+    let finalHeader = '';
+    let finalTitle = '';
+
+    if (
+      config.useAnalyzedTOC &&
+      config.analyzedChapterHeaders &&
+      config.analyzedChapterHeaders.length >= currentChapterNum
+    ) {
+      finalHeader = config.analyzedChapterHeaders[currentChapterNum - 1];
+      if (config.includeCharCountInHeader) {
+        finalHeader = `${finalHeader} (${chapterChars}字)`;
+      }
+      finalTitle = finalHeader;
+    } else {
+      const { header, title } = formatChapterHeader(
+        currentChapterNum,
+        config,
+        chapterChars,
+        activeDName,
+        activeDIdx
+      );
+      finalHeader = header;
+      finalTitle = title;
+    }
 
     chapters.push({
       id: `cn-chap-${currentChapterNum}`,
       chapterIndex: currentChapterNum,
-      header,
-      title,
+      header: finalHeader,
+      title: finalTitle,
       content: chapterContent,
       charCount: chapterChars,
       paragraphCount: chapterBlockTexts.length,
@@ -818,7 +1537,7 @@ export function splitRawIntoChineseChapters(
     });
 
     currentChapterNum++;
-    if (config.enableInfiniteFlow) {
+    if (config.enableInfiniteFlow && activeDName) {
       currentDungeonIndex++;
     }
     currentBlockIndex = chosenEndIndex;
